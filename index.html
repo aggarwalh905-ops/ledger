@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Advanced Cloud Ledger Dashboard</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 12px; background: #f8fafc; color: #0f172a; }
+        .container { max-width: 500px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+        .panel { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); border: 1px solid #e2e8f0; }
+        
+        /* Interactive Live Mic Style */
+        .mic-section { text-align: center; padding: 10px 0; }
+        .mic-btn { width: 90px; height: 90px; border: none; border-radius: 50%; background: #007bff; color: white; font-size: 32px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 8px 20px rgba(0,123,255,0.3); transition: all 0.2s ease; }
+        .recording { background: #ef4444 !important; box-shadow: 0 0 0 12px rgba(239,68,68,0.2); animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.04); } 100% { transform: scale(1); } }
+        
+        #status { font-size: 13px; font-weight: 700; color: #64748b; margin-top: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+        
+        /* Edit Arena */
+        .input-label { text-align: left; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 4px; display: block; }
+        .text-input { width: 94%; padding: 14px; font-size: 16px; border: 2px solid #cbd5e1; border-radius: 12px; outline: none; transition: border 0.2s; font-weight: 500; background: #f8fafc; }
+        .text-input:focus { border-color: #007bff; background: white; }
+        
+        .btn-send { padding: 14px; font-size: 16px; width: 100%; border: none; border-radius: 12px; background: #10b981; color: white; font-weight: bold; cursor: pointer; box-shadow: 0 4px 12px rgba(16,185,129,0.2); margin-top: 8px; }
+        
+        /* Table Layout */
+        h3 { margin: 0 0 12px 0; font-size: 18px; color: #1e293b; display: flex; align-items: center; gap: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        th, td { padding: 12px 10px; text-align: left; border-bottom: 1px solid #f1f5f9; }
+        th { background: #f8fafc; color: #64748b; font-weight: 600; font-size: 13px; }
+        td { font-size: 15px; }
+        .badge-amt { background: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 8px; font-weight: 700; font-size: 14px; }
+        
+        /* Live Text Helper Chips */
+        .suggestions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; justify-content: center; }
+        .chip { background: #e2e8f0; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; color: #475569; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- TOP CONTROLLER PANEL -->
+        <div class="panel mic-section">
+            <h3>🎙️ Voice Command Ledger</h3>
+            <div class="mic-box">
+                <button id="recordBtn" class="mic-btn">🎙️</button>
+            </div>
+            <div id="status">Tap Mic To Start Ledger Mode</div>
+            
+            <div class="suggestions">
+                <span class="chip" onclick="insertSample('Rinku 100 ka tel')">Sample 1</span>
+                <span class="chip" onclick="insertSample('Ramesh 9812 ne 200 ki chini li')">Sample 2</span>
+            </div>
+        </div>
+
+        <!-- REVIEW & EDIT PANEL -->
+        <div class="panel">
+            <span class="input-label">📝 Review or Edit before saving:</span>
+            <input type="text" id="textMsg" class="text-input" placeholder="What did you hear? Clear text output goes here...">
+            <button id="sendBtn" class="btn-send">🚀 Save Entry To Cloud Sheet</button>
+        </div>
+
+        <!-- RECENT BALANCE SHEET PANEL -->
+        <div class="panel">
+            <h3>📊 Live Outstanding Balances</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Customer Account</th>
+                        <th>Total Balance</th>
+                    </tr>
+                </thead>
+                <tbody id="summaryTableBody">
+                    <tr><td colspan="2" style="text-align:center; color:#94a3b8; padding: 20px;">Fetching cloud sync database...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // --- PASTE YOUR NEW GOOGLE DEPLOYMENT WEB APP URL HERE ---
+        const CLOUD_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzYfQJBFuyokmAnDMkmYAFvDZz9mkm6YBzdqSrKFKWR5-q2X5t_jMIXmE_3s0ontJhOug/exec";
+
+        const btn = document.getElementById('recordBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const textMsg = document.getElementById('textMsg');
+        const status = document.getElementById('status');
+        
+        let isListening = false;
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition;
+
+        // Auto Load Cloud Data on Startup
+        window.onload = async () => {
+            fetchSummaryOnly();
+        };
+
+        async function fetchSummaryOnly() {
+            try {
+                let res = await fetch(CLOUD_SCRIPT_URL);
+                let data = await res.json();
+                updateDashboardUI(data.summary);
+            } catch(e) { status.innerText = "⚠️ Cloud Sync Failed."; }
+        }
+
+        // Native Front-end Phonetic Corrections
+        function autoCorrectPhonetics(rawText) {
+            let txt = rawText.toLowerCase();
+            
+            // Fix standard numeric sound patterns instantly before shipping
+            const patterns = {
+                "soo": "100",
+                "so ": "100 ",
+                "sau": "100",
+                "do soo": "200",
+                "do sau": "200",
+                "teen soo": "300",
+                "paanch soo": "500",
+                "rupe": "rs",
+                "rupaye": "rs",
+                "rupay": "rs"
+            };
+
+            for (let [sound, replacement] of Object.entries(patterns)) {
+                txt = txt.replace(new RegExp(sound, 'g'), replacement);
+            }
+            return txt;
+        }
+
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = false; // Stops instantly when you pause, allowing safe editing!
+            recognition.lang = 'en-IN';      // Indian English/Hinglish keyboard mapping
+            recognition.interimResults = true;
+
+            recognition.onstart = () => {
+                isListening = true;
+                btn.classList.add('recording');
+                status.innerText = "🔴 Listening... Speak clearly now";
+            };
+
+            recognition.onresult = (event) => {
+                let interimTranscript = '';
+                let finalTranscript = '';
+
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+
+                // Show live preview stream inside edit container box layout
+                if (finalTranscript.trim()) {
+                    let fixedText = autoCorrectPhonetics(finalTranscript);
+                    textMsg.value = fixedText;
+                } else if (interimTranscript.trim()) {
+                    textMsg.value = interimTranscript;
+                }
+            };
+
+            recognition.onend = () => {
+                isListening = false;
+                btn.classList.remove('recording');
+                status.innerText = "⏸️ Paused. Verify text below and click save.";
+            };
+
+            btn.onclick = () => {
+                if (isListening) {
+                    recognition.stop();
+                } else {
+                    recognition.start();
+                }
+            };
+        }
+
+        async function sendDataToServer(txt) {
+            if(!txt.trim()) return;
+            status.innerText = "Cloud computing execution sync active...";
+            
+            try {
+                let response = await fetch(CLOUD_SCRIPT_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({ text: txt })
+                });
+                let resData = await response.json();
+                
+                if(resData.success) {
+                    status.innerText = "✅ Saved successfully to Google Sheet!";
+                    updateDashboardUI(resData.new_summary);
+                    speakBackConfirmation(resData.tts_phrase);
+                    textMsg.value = ""; // Clear input arena
+                } else {
+                    status.innerText = "❌ Missing valid number formatting.";
+                }
+            } catch(err) {
+                status.innerText = "❌ Server configuration connection error.";
+            }
+        }
+
+        function updateDashboardUI(summaryData) {
+            const tbody = document.getElementById('summaryTableBody');
+            tbody.innerHTML = "";
+            if(!summaryData || summaryData.length === 0) {
+                tbody.innerHTML = "<tr><td colspan='2' style='text-align:center; color:#94a3b8;'>Empty database state.</td></tr>";
+                return;
+            }
+            summaryData.forEach(row => {
+                tbody.innerHTML += `<tr><td>👤 <b>${row.name}</b></td><td><span class="badge-amt">₹${row.total_spent}</span></td></tr>`;
+            });
+        }
+
+        function speakBackConfirmation(phrase) {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(phrase);
+                utterance.lang = 'en-IN';
+                utterance.rate = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        sendBtn.onclick = () => { sendDataToServer(textMsg.value); };
+        function insertSample(str) { textMsg.value = str; }
+    </script>
+</body>
+</html>
